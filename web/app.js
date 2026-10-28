@@ -38,7 +38,8 @@ let srcImage = null;
 let detSession = null;
 const sessions = {}; // "sr" | "face" -> { session, backend }
 // ?cpu=1 trên địa chỉ trang để ép chạy bằng CPU (dùng khi WebGPU của máy bị lỗi)
-const useGPU = !!navigator.gpu && !new URLSearchParams(location.search).has("cpu");
+// điện thoại luôn dùng CPU ở chế độ tiết kiệm RAM: dễ đoán và ít bị trình duyệt tắt hơn WebGPU
+const useGPU = !MOBILE && !!navigator.gpu && !new URLSearchParams(location.search).has("cpu");
 const usedBackends = new Set(); // thiết bị thực sự dùng, hiện ở dòng trạng thái
 
 let elapsedFrom = 0; // đang xử lý thì hiện thêm số giây đã chạy, để người dùng biết trang không bị treo
@@ -113,9 +114,21 @@ async function getSession(kind, forceCPU = false) {
       return session;
     } catch (e) { console.warn("WebGPU không dùng được, chuyển sang CPU:", e); }
   }
-  const session = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] });
+  const session = await ort.InferenceSession.create(bytes, cpuOptions(kind));
   sessions[kind] = { session, backend: "CPU" };
   return session;
+}
+
+// Chế độ tiết kiệm RAM (đo trên CodeFormer: bộ nhớ WebAssembly 1.4GB -> 0.85GB):
+// - không gộp sẵn trọng số fp16 -> fp32 (graphOptimizationLevel "disabled"), chỉ đổi lúc chạy từng lớp
+// - không giữ vùng nhớ đệm (arena) và không cấp sẵn bộ nhớ theo mẫu
+function cpuOptions(kind) {
+  const opts = { executionProviders: ["wasm"] };
+  if (MOBILE) {
+    Object.assign(opts, { enableCpuMemArena: false, enableMemPattern: false });
+    if (kind === "face") opts.graphOptimizationLevel = "disabled";
+  }
+  return opts;
 }
 
 async function releaseSession(kind) {
@@ -443,10 +456,15 @@ addEventListener("error", (e) => e.message && setStatus("Lỗi: " + e.message));
 try {
   if (sessionStorage.getItem("enhance-running")) {
     sessionStorage.removeItem("enhance-running");
-    setStatus("Lần trước trang bị trình duyệt tắt giữa chừng, thường do máy thiếu bộ nhớ. Hãy thử ảnh nhỏ hơn, chọn 1×, hoặc bỏ chọn Phục hồi khuôn mặt.");
+    // tự tắt phần tốn RAM nhất (phục hồi khuôn mặt) để lần này vẫn làm nét được
+    localStorage.setItem("enhance-no-face", "1");
+    setStatus("Lần trước trang bị trình duyệt tắt giữa chừng do máy không đủ bộ nhớ. Đã tự bỏ chọn Phục hồi khuôn mặt (phần tốn bộ nhớ nhất) để ảnh vẫn được làm nét. Bấm Làm nét để thử lại.");
     statusEl.classList.add("warn");
   }
 } catch {}
 if (MOBILE) $("mobileNote").hidden = false;
+try { if (localStorage.getItem("enhance-no-face")) $("faces").checked = false; } catch {}
+// người dùng tự bật lại thì nhớ lựa chọn đó
+$("faces").onchange = () => { try { $("faces").checked ? localStorage.removeItem("enhance-no-face") : localStorage.setItem("enhance-no-face", "1"); } catch {} };
 
 if (!self.caches) console.warn("Trình duyệt không hỗ trợ Cache Storage: model sẽ được tải lại mỗi lần.");
