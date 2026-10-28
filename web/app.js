@@ -299,8 +299,10 @@ function loadFile(file) {
 }
 
 const drop = $("drop"), fileInput = $("file");
-drop.onclick = () => fileInput.click();
-fileInput.onchange = () => loadFile(fileInput.files[0]);
+fileInput.onchange = () => {
+  loadFile(fileInput.files[0]);
+  fileInput.value = ""; // để chọn lại cùng một ảnh vẫn nhận
+};
 drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
 drop.ondragleave = () => drop.classList.remove("over");
 drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); loadFile(e.dataTransfer.files[0]); };

@@ -25,7 +25,7 @@
   .grid { display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start; }
   @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 20px; text-align: center; cursor: pointer;
+  .drop { display: block; border: 2px dashed var(--line); border-radius: 10px; padding: 20px; text-align: center; cursor: pointer;
           color: var(--muted); }
   .drop.over { border-color: var(--accent); color: var(--text); }
   .drop img { max-width: 100%; max-height: 220px; display: block; margin: 0 auto 8px; border-radius: 6px; }
@@ -64,11 +64,12 @@
 
   <div class="grid">
     <section class="card">
-      <div class="drop" id="drop">
+      <!-- dùng label gắn với ô chọn file: bấm vào là mở hộp chọn ảnh, chạy được cả trên điện thoại -->
+      <label class="drop" id="drop" for="file">
         <img id="thumb" hidden alt="">
-        <div id="dropText">Kéo ảnh vào đây hoặc <b>bấm để chọn ảnh</b></div>
-        <input type="file" id="file" accept="image/*" hidden>
-      </div>
+        <span id="dropText">Kéo ảnh vào đây hoặc <b>bấm để chọn ảnh</b></span>
+      </label>
+      <input type="file" id="file" accept="image/*" hidden>
 
       <label class="f">Phóng to</label>
       <div class="seg">
