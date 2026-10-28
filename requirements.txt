@@ -1,0 +1,9 @@
+# Bản PyTorch chỉ dùng CPU (nhẹ hơn nhiều so với bản CUDA)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.4
+torchvision>=0.19
+spandrel>=0.4.2
+spandrel_extra_arches>=0.2.0
+gradio>=5.0
+opencv-python>=4.10
+numpy>=1.26
