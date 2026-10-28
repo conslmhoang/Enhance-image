@@ -9,6 +9,13 @@ const MODEL_CACHE = "enhance-models-v1";
 const SR_URLS = ["web/models/realesrgan_x2.onnx"];
 const FACE_URLS = ["web/models/codeformer.onnx.part0", "web/models/codeformer.onnx.part1"];
 const DET_URLS = ["web/models/yunet.onnx"];
+// kích thước thật của từng file: GitHub Pages nén gzip nên content-length không dùng để tính tiến độ được
+const SIZES = {
+  "web/models/realesrgan_x2.onnx": 33811958,
+  "web/models/codeformer.onnx.part0": 95000000,
+  "web/models/codeformer.onnx.part1": 93652126,
+  "web/models/yunet.onnx": 232589,
+};
 const MAX_SIDE = 1280; // ảnh lớn hơn được thu nhỏ trước khi xử lý (trình duyệt có giới hạn bộ nhớ)
 const TILE = 192, PAD = 8; // đều là số chẵn vì model x2 cần kích thước chẵn
 
@@ -38,14 +45,15 @@ async function fetchCached(urls, label) {
     let res = cache && (await cache.match(url));
     if (!res) {
       const chunks = [];
-      let got = 0, total = 0;
-      // mạng chập chờn hay làm đứt file lớn: thử lại và tải tiếp từ chỗ bị đứt
+      let got = 0;
+      const total = SIZES[url] || 0;
+      // mạng chập chờn hay làm đứt file lớn: tự thử lại (tải lại từ đầu, vì file được nén gzip khi truyền)
       for (let attempt = 1; ; attempt++) {
+        chunks.length = 0;
+        got = 0;
         try {
-          const r = await fetch(url, got ? { headers: { Range: `bytes=${got}-` } } : {});
+          const r = await fetch(url);
           if (!r.ok) throw new Error(`Không tải được ${url} (${r.status})`);
-          if (got && r.status !== 206) { chunks.length = 0; got = 0; } // máy chủ không hỗ trợ tải tiếp
-          if (!total) total = +r.headers.get("content-length") || 0;
           const reader = r.body.getReader();
           for (;;) {
             const { done, value } = await reader.read();
@@ -53,8 +61,9 @@ async function fetchCached(urls, label) {
             chunks.push(value);
             got += value.length;
             const mb = (got / 1e6).toFixed(0);
-            setStatus(`Đang tải model ${label} (${i + 1}/${urls.length}): ${mb}${total ? "/" + (total / 1e6).toFixed(0) : ""} MB`, total ? got / total : null);
+            setStatus(`Đang tải model ${label} (${i + 1}/${urls.length}): ${mb}${total ? "/" + (total / 1e6).toFixed(0) : ""} MB`, total ? Math.min(1, got / total) : null);
           }
+          if (total && got !== total) throw new Error(`File ${url} bị thiếu (${got}/${total} byte)`);
           break;
         } catch (e) {
           if (attempt >= 6) throw e;
