@@ -57,9 +57,13 @@ def download(name: str, url: str, size: int, retries: int = 8) -> None:
     print(f"  ✓ {name}")
 
 
-if __name__ == "__main__":
+def ensure_models() -> None:
     MODELS.mkdir(exist_ok=True)
     print("Đang kiểm tra / tải model...")
     for name, (url, size) in FILES.items():
         download(name, url, size)
     print("Đã đủ model.")
+
+
+if __name__ == "__main__":
+    ensure_models()

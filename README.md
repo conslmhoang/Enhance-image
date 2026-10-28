@@ -1,3 +1,17 @@
+---
+title: Làm nét ảnh – giữ nét mặt
+emoji: 🖼️
+colorFrom: indigo
+colorTo: pink
+sdk: gradio
+sdk_version: 6.30.0
+python_version: "3.12"
+app_file: app.py
+pinned: false
+license: mit
+short_description: Làm nét ảnh chân dung, giữ nguyên khuôn mặt
+---
+
 # Làm nét ảnh – giữ nguyên nét mặt
 
 Công cụ làm nét và phóng to ảnh chân dung chạy trên máy của bạn, **không cần GPU**, **không gửi ảnh lên mạng**.
@@ -21,7 +35,11 @@ Hai thanh trượt quyết định mức "giống người thật":
 
 Nếu thấy mặt hơi "lạ", hãy tăng độ trung thực hoặc giảm mức áp dụng AI xuống khoảng 0.6–0.7.
 
-## Cài đặt và chạy
+## Dùng thử trên web
+
+Mở **https://huggingface.co/spaces/conslmhoang/Enhance-image**, không cần cài gì. Bản web chạy trên máy chủ miễn phí nên chậm (1–2 phút mỗi ảnh), giới hạn ảnh 1024px và chỉ phóng tối đa 2×. Muốn nhanh hơn thì cài trên máy theo hướng dẫn dưới đây.
+
+## Cài đặt và chạy trên máy
 
 Cần **Python 3.10 trở lên** ([tải tại đây](https://www.python.org/downloads/); khi cài trên Windows nhớ tick *Add Python to PATH*) và khoảng **2GB** dung lượng trống.
 
