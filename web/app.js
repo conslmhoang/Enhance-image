@@ -5,15 +5,22 @@ import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/o
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
 ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
 
-const MODEL_CACHE = "enhance-models-v1";
+const MODEL_CACHE = "enhance-models-v2"; // đổi tên khi đổi file model, bản cũ sẽ bị xoá
+if (self.caches) caches.keys().then((ks) => ks.filter((k) => k.startsWith("enhance-models-") && k !== MODEL_CACHE).forEach((k) => caches.delete(k)));
 const SR_URLS = ["web/models/realesrgan_x2.onnx"];
-const FACE_URLS = ["web/models/codeformer.onnx.part0", "web/models/codeformer.onnx.part1"];
+const FACE_URLS = ["web/models/codeformer.onnx.part0", "web/models/codeformer.onnx.part1", "web/models/codeformer.onnx.part2", "web/models/codeformer.onnx.part3", "web/models/codeformer.onnx.part4", "web/models/codeformer.onnx.part5", "web/models/codeformer.onnx.part6", "web/models/codeformer.onnx.part7"];
 const DET_URLS = ["web/models/yunet.onnx"];
 // kích thước thật của từng file: GitHub Pages nén gzip nên content-length không dùng để tính tiến độ được
 const SIZES = {
   "web/models/realesrgan_x2.onnx": 33811958,
-  "web/models/codeformer.onnx.part0": 95000000,
-  "web/models/codeformer.onnx.part1": 93652126,
+  "web/models/codeformer.onnx.part0": 24000000,
+  "web/models/codeformer.onnx.part1": 24000000,
+  "web/models/codeformer.onnx.part2": 24000000,
+  "web/models/codeformer.onnx.part3": 24000000,
+  "web/models/codeformer.onnx.part4": 24000000,
+  "web/models/codeformer.onnx.part5": 24000000,
+  "web/models/codeformer.onnx.part6": 24000000,
+  "web/models/codeformer.onnx.part7": 20652126,
   "web/models/yunet.onnx": 232589,
 };
 const MAX_SIDE = 1280; // ảnh lớn hơn được thu nhỏ trước khi xử lý (trình duyệt có giới hạn bộ nhớ)
