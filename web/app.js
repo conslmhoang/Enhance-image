@@ -3,7 +3,10 @@
 import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.mjs";
 
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
-ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
+// điện thoại / máy tính bảng: ít RAM, trình duyệt dễ tắt ngang trang nếu giữ nhiều model cùng lúc
+const MOBILE = !!navigator.userAgentData?.mobile || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+  (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(MOBILE ? 4 : 8, navigator.hardwareConcurrency || 4) : 1;
 
 const MODEL_CACHE = "enhance-models-v2"; // đổi tên khi đổi file model, bản cũ sẽ bị xoá
 if (self.caches) caches.keys().then((ks) => ks.filter((k) => k.startsWith("enhance-models-") && k !== MODEL_CACHE).forEach((k) => caches.delete(k)));
@@ -23,7 +26,7 @@ const SIZES = {
   "web/models/codeformer.onnx.part7": 20652126,
   "web/models/yunet.onnx": 232589,
 };
-const MAX_SIDE = 1280; // ảnh lớn hơn được thu nhỏ trước khi xử lý (trình duyệt có giới hạn bộ nhớ)
+const MAX_SIDE = MOBILE ? 720 : 1280; // ảnh lớn hơn được thu nhỏ trước khi xử lý (trình duyệt có giới hạn bộ nhớ)
 const TILE = 192, PAD = 8; // đều là số chẵn vì model x2 cần kích thước chẵn
 
 // 5 điểm mốc chuẩn trong khung 512x512 (FFHQ) – giống enhancer.py
@@ -32,93 +35,117 @@ const TEMPLATE = [[192.98138, 239.94708], [318.90277, 240.1936], [256.63416, 314
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status"), prog = $("prog"), goBtn = $("go");
 let srcImage = null;
-let srSession = null, faceSession = null, detSession = null;
-const useGPU = !!navigator.gpu;
-let backend = "CPU"; // thiết bị thực sự dùng, hiện ở dòng trạng thái
+let detSession = null;
+const sessions = {}; // "sr" | "face" -> { session, backend }
+// ?cpu=1 trên địa chỉ trang để ép chạy bằng CPU (dùng khi WebGPU của máy bị lỗi)
+const useGPU = !!navigator.gpu && !new URLSearchParams(location.search).has("cpu");
+const usedBackends = new Set(); // thiết bị thực sự dùng, hiện ở dòng trạng thái
 
+let elapsedFrom = 0; // đang xử lý thì hiện thêm số giây đã chạy, để người dùng biết trang không bị treo
 function setStatus(msg, p) {
-  statusEl.textContent = msg;
+  statusEl.dataset.msg = msg;
+  statusEl.textContent = elapsedFrom ? `${msg} (${Math.round((performance.now() - elapsedFrom) / 1000)}s)` : msg;
   if (p == null) prog.hidden = true;
   else { prog.hidden = false; prog.value = p; }
 }
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
 // ---------- tải model (lưu vào Cache Storage, lần sau không phải tải lại) ----------
+// ghi thẳng vào một mảng cấp sẵn để không giữ nhiều bản sao model trong RAM (quan trọng trên điện thoại)
 async function fetchCached(urls, label) {
   const cache = self.caches ? await caches.open(MODEL_CACHE).catch(() => null) : null;
-  const parts = [];
-  for (let i = 0; i < urls.length; i++) {
-    const url = urls[i];
-    let res = cache && (await cache.match(url));
-    if (!res) {
-      const chunks = [];
-      let got = 0;
-      const total = SIZES[url] || 0;
-      // mạng chập chờn hay làm đứt file lớn: tự thử lại (tải lại từ đầu, vì file được nén gzip khi truyền)
-      for (let attempt = 1; ; attempt++) {
-        chunks.length = 0;
-        got = 0;
-        try {
-          const r = await fetch(url);
-          if (!r.ok) throw new Error(`Không tải được ${url} (${r.status})`);
-          const reader = r.body.getReader();
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            got += value.length;
-            const mb = (got / 1e6).toFixed(0);
-            setStatus(`Đang tải model ${label} (${i + 1}/${urls.length}): ${mb}${total ? "/" + (total / 1e6).toFixed(0) : ""} MB`, total ? Math.min(1, got / total) : null);
-          }
-          if (total && got !== total) throw new Error(`File ${url} bị thiếu (${got}/${total} byte)`);
-          break;
-        } catch (e) {
-          if (attempt >= 6) throw e;
-          setStatus(`Mạng bị gián đoạn, đang thử tải lại (${attempt}/5)...`);
-          await new Promise((r) => setTimeout(r, 1500 * attempt));
-        }
-      }
-      const blob = new Blob(chunks);
-      if (cache) await cache.put(url, new Response(blob)).catch(() => {});
-      parts.push(new Uint8Array(await blob.arrayBuffer()));
-    } else {
-      parts.push(new Uint8Array(await res.arrayBuffer()));
-    }
-  }
-  const size = parts.reduce((s, p) => s + p.length, 0);
-  const all = new Uint8Array(size);
+  const all = new Uint8Array(urls.reduce((n, u) => n + SIZES[u], 0));
   let off = 0;
-  for (const p of parts) { all.set(p, off); off += p.length; }
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i], total = SIZES[url];
+    const hit = cache && (await cache.match(url));
+    if (hit) {
+      const buf = new Uint8Array(await hit.arrayBuffer());
+      if (buf.length === total) { all.set(buf, off); off += total; continue; }
+      await cache.delete(url); // bản lưu bị hỏng: tải lại
+    }
+    // mạng chập chờn hay làm đứt file lớn: tự thử lại (tải lại từ đầu, vì file được nén gzip khi truyền)
+    for (let attempt = 1; ; attempt++) {
+      let got = 0;
+      try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`Không tải được ${url} (${r.status})`);
+        const reader = r.body.getReader();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (got + value.length > total) throw new Error(`File ${url} lớn hơn dự kiến`);
+          all.set(value, off + got);
+          got += value.length;
+          setStatus(`Đang tải model ${label} (${i + 1}/${urls.length}): ${(got / 1e6).toFixed(0)}/${(total / 1e6).toFixed(0)} MB`, got / total);
+        }
+        if (got !== total) throw new Error(`File ${url} bị thiếu (${got}/${total} byte)`);
+        break;
+      } catch (e) {
+        if (attempt >= 6) throw e;
+        setStatus(`Mạng bị gián đoạn, đang thử tải lại (${attempt}/5)...`);
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
+    }
+    if (cache) await cache.put(url, new Response(all.slice(off, off + total))).catch(() => {});
+    off += total;
+  }
   return all;
 }
 
-async function createSession(bytes) {
-  if (useGPU) {
+const MODELS = {
+  sr: { urls: SR_URLS, label: "làm nét" },
+  face: { urls: FACE_URLS, label: "khuôn mặt" },
+};
+
+// tạo phiên chạy model: ưu tiên WebGPU, lỗi thì dùng CPU (WebAssembly)
+async function getSession(kind, forceCPU = false) {
+  if (sessions[kind] && !(forceCPU && sessions[kind].backend !== "CPU")) return sessions[kind].session;
+  await releaseSession(kind);
+  const { urls, label } = MODELS[kind];
+  const bytes = await fetchCached(urls, label);
+  setStatus(`Đang khởi tạo model ${label}...`);
+  await tick();
+  if (useGPU && !forceCPU) {
     try {
-      const s = await ort.InferenceSession.create(bytes, { executionProviders: ["webgpu"] });
-      backend = "WebGPU";
-      return s;
-    }
-    catch (e) { console.warn("WebGPU không dùng được, chuyển sang CPU:", e); }
+      const session = await ort.InferenceSession.create(bytes, { executionProviders: ["webgpu"] });
+      sessions[kind] = { session, backend: "WebGPU" };
+      return session;
+    } catch (e) { console.warn("WebGPU không dùng được, chuyển sang CPU:", e); }
   }
-  return ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] });
+  const session = await ort.InferenceSession.create(bytes, { executionProviders: ["wasm"] });
+  sessions[kind] = { session, backend: "CPU" };
+  return session;
 }
 
-async function loadModels(needFace) {
-  if (!srSession) {
-    const b = await fetchCached(SR_URLS, "làm nét");
-    setStatus("Đang khởi tạo model làm nét...");
-    srSession = await createSession(b);
+async function releaseSession(kind) {
+  const s = sessions[kind];
+  delete sessions[kind];
+  if (s) await s.session.release().catch(() => {});
+}
+
+// chạy model; nếu WebGPU báo lỗi lúc chạy (hết bộ nhớ card đồ hoạ...) thì chạy lại bằng CPU
+async function runModel(kind, feeds) {
+  const session = await getSession(kind);
+  try {
+    const out = await session.run(feeds);
+    usedBackends.add(sessions[kind].backend);
+    return out;
+  } catch (e) {
+    if (sessions[kind]?.backend !== "WebGPU") throw e;
+    console.warn("WebGPU lỗi khi chạy, chuyển sang CPU:", e);
+    const out = await (await getSession(kind, true)).run(feeds);
+    usedBackends.add("CPU");
+    return out;
   }
-  if (needFace && !faceSession) {
-    const b = await fetchCached(FACE_URLS, "khuôn mặt");
-    setStatus("Đang khởi tạo model khuôn mặt...");
-    faceSession = await createSession(b);
-  }
-  if (needFace && !detSession) {
+}
+
+async function getDetector() {
+  if (!detSession) {
     const b = await fetchCached(DET_URLS, "tìm mặt");
     detSession = await ort.InferenceSession.create(b, { executionProviders: ["wasm"] });
   }
+  return detSession;
 }
 
 // ---------- tiện ích ảnh ----------
@@ -157,7 +184,7 @@ async function upscale(srcCanvas, onProgress) {
           t[di] = src[si] / 255; t[n + di] = src[si + 1] / 255; t[2 * n + di] = src[si + 2] / 255;
         }
       }
-      const res = await srSession.run({ input: new ort.Tensor("float32", t, [1, 3, ph, pw]) });
+      const res = await runModel("sr", { input: new ort.Tensor("float32", t, [1, 3, ph, pw]) });
       const o = res.output.data, OW = pw * 2, ON = OW * ph * 2;
       // chỉ chép phần lõi của ô (bỏ lề) để không có vệt nối
       const cx = (x - x0) * 2, cy = (y - y0) * 2;
@@ -186,7 +213,7 @@ async function detectFaces(canvas, scoreThr = 0.6, nmsThr = 0.3) {
   ctx.drawImage(canvas, 0, 0, Math.round(canvas.width * k), Math.round(canvas.height * k));
   const d = ctx.getImageData(0, 0, S, S).data, N = S * S, t = new Float32Array(3 * N);
   for (let i = 0; i < N; i++) { t[i] = d[i * 4 + 2]; t[N + i] = d[i * 4 + 1]; t[2 * N + i] = d[i * 4]; } // BGR, 0..255
-  const o = await detSession.run({ input: new ort.Tensor("float32", t, [1, 3, S, S]) });
+  const o = await (await getDetector()).run({ input: new ort.Tensor("float32", t, [1, 3, S, S]) });
 
   const cand = [];
   for (const st of [8, 16, 32]) {
@@ -254,7 +281,7 @@ async function restoreFace(up, pts, fidelity, blend) {
   cctx.drawImage(up, 0, 0);
   const cd = cctx.getImageData(0, 0, 512, 512);
 
-  const res = await faceSession.run({
+  const res = await runModel("face", {
     input: new ort.Tensor("float32", toCHW(cd.data, 512, 512, 2, -1), [1, 3, 512, 512]),
     weight: new ort.Tensor("float32", new Float32Array([fidelity]), []),
   });
@@ -338,11 +365,14 @@ function showResult(before, after, info) {
 goBtn.onclick = async () => {
   if (!srcImage) return;
   goBtn.disabled = true;
+  statusEl.classList.remove("warn");
   const scale = +document.querySelector("input[name=scale]:checked").value;
   const fidelity = +$("fid").value, blend = +$("blend").value, doFaces = $("faces").checked;
   try {
     const t0 = performance.now();
-    await loadModels(doFaces);
+    elapsedFrom = t0;
+    usedBackends.clear();
+    try { sessionStorage.setItem("enhance-running", "1"); } catch {} // để biết nếu trang bị tắt ngang (thiếu RAM)
 
     // ảnh vào: thu nhỏ nếu quá lớn, làm tròn kích thước về số chẵn
     let w = srcImage.naturalWidth, h = srcImage.naturalHeight, note = "";
@@ -356,12 +386,16 @@ goBtn.onclick = async () => {
     let faces = [];
     if (doFaces) { setStatus("Đang tìm khuôn mặt..."); await tick(); faces = await detectFaces(src); }
 
+    await getSession("sr");
     const up = await upscale(src, (p) => setStatus("Đang làm nét toàn ảnh (Real-ESRGAN)...", p));
+    // điện thoại: giải phóng model này trước khi nạp model khuôn mặt cho đỡ tốn RAM
+    if (MOBILE && faces.length) await releaseSession("sr");
     for (let i = 0; i < faces.length; i++) {
       setStatus(`Đang phục hồi khuôn mặt ${i + 1}/${faces.length} (CodeFormer)...`, i / faces.length);
       await tick();
       await restoreFace(up, faces[i].map(([x, y]) => [x * 2, y * 2]), fidelity, blend);
     }
+    if (MOBILE) await releaseSession("face");
 
     // 1× = làm nét ở cỡ x2 rồi thu về cỡ gốc
     let out = up;
@@ -384,13 +418,35 @@ goBtn.onclick = async () => {
       a.download = "lam_net.png";
       a.hidden = false;
     }, "image/png");
-    setStatus(`Xong (chạy bằng ${backend}).`);
+    elapsedFrom = 0;
+    setStatus(`Xong (chạy bằng ${[...usedBackends].join(" + ") || "CPU"}).`);
+    $("result").scrollIntoView({ behavior: "smooth", block: "start" }); // trên điện thoại kết quả nằm bên dưới
   } catch (e) {
     console.error(e);
-    setStatus("Lỗi: " + (e.message || e));
+    elapsedFrom = 0;
+    setStatus("Lỗi: " + (e.message || e) + (MOBILE ? " · Trên điện thoại hãy thử ảnh nhỏ hơn hoặc bỏ chọn Phục hồi khuôn mặt." : ""));
   } finally {
+    elapsedFrom = 0;
+    try { sessionStorage.removeItem("enhance-running"); } catch {}
     goBtn.disabled = false;
   }
 };
+
+// cập nhật số giây mỗi giây kể cả khi model đang chạy lâu
+setInterval(() => elapsedFrom && setStatus(statusEl.dataset.msg, prog.hidden ? null : prog.value), 1000);
+
+// lỗi không bắt được (ví dụ khi tải thư viện) cũng hiện ra cho người dùng thấy
+addEventListener("unhandledrejection", (e) => setStatus("Lỗi: " + (e.reason?.message || e.reason)));
+addEventListener("error", (e) => e.message && setStatus("Lỗi: " + e.message));
+
+// lần trước trang bị tắt ngang giữa lúc xử lý => thường do thiếu bộ nhớ
+try {
+  if (sessionStorage.getItem("enhance-running")) {
+    sessionStorage.removeItem("enhance-running");
+    setStatus("Lần trước trang bị trình duyệt tắt giữa chừng, thường do máy thiếu bộ nhớ. Hãy thử ảnh nhỏ hơn, chọn 1×, hoặc bỏ chọn Phục hồi khuôn mặt.");
+    statusEl.classList.add("warn");
+  }
+} catch {}
+if (MOBILE) $("mobileNote").hidden = false;
 
 if (!self.caches) console.warn("Trình duyệt không hỗ trợ Cache Storage: model sẽ được tải lại mỗi lần.");
