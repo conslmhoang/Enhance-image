@@ -37,19 +37,30 @@ async function fetchCached(urls, label) {
     const url = urls[i];
     let res = cache && (await cache.match(url));
     if (!res) {
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`Không tải được ${url} (${r.status})`);
-      const total = +r.headers.get("content-length") || 0;
-      const reader = r.body.getReader();
       const chunks = [];
-      let got = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        got += value.length;
-        const mb = (got / 1e6).toFixed(0);
-        setStatus(`Đang tải model ${label} (${i + 1}/${urls.length}): ${mb}${total ? "/" + (total / 1e6).toFixed(0) : ""} MB`, total ? got / total : null);
+      let got = 0, total = 0;
+      // mạng chập chờn hay làm đứt file lớn: thử lại và tải tiếp từ chỗ bị đứt
+      for (let attempt = 1; ; attempt++) {
+        try {
+          const r = await fetch(url, got ? { headers: { Range: `bytes=${got}-` } } : {});
+          if (!r.ok) throw new Error(`Không tải được ${url} (${r.status})`);
+          if (got && r.status !== 206) { chunks.length = 0; got = 0; } // máy chủ không hỗ trợ tải tiếp
+          if (!total) total = +r.headers.get("content-length") || 0;
+          const reader = r.body.getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            got += value.length;
+            const mb = (got / 1e6).toFixed(0);
+            setStatus(`Đang tải model ${label} (${i + 1}/${urls.length}): ${mb}${total ? "/" + (total / 1e6).toFixed(0) : ""} MB`, total ? got / total : null);
+          }
+          break;
+        } catch (e) {
+          if (attempt >= 6) throw e;
+          setStatus(`Mạng bị gián đoạn, đang thử tải lại (${attempt}/5)...`);
+          await new Promise((r) => setTimeout(r, 1500 * attempt));
+        }
       }
       const blob = new Blob(chunks);
       if (cache) await cache.put(url, new Response(blob)).catch(() => {});
