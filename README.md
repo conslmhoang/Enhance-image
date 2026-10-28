@@ -1,17 +1,3 @@
----
-title: Làm nét ảnh – giữ nét mặt
-emoji: 🖼️
-colorFrom: indigo
-colorTo: pink
-sdk: gradio
-sdk_version: 6.30.0
-python_version: "3.12"
-app_file: app.py
-pinned: false
-license: mit
-short_description: Làm nét ảnh chân dung, giữ nguyên khuôn mặt
----
-
 # Làm nét ảnh – giữ nguyên nét mặt
 
 Công cụ làm nét và phóng to ảnh chân dung chạy trên máy của bạn, **không cần GPU**, **không gửi ảnh lên mạng**.
@@ -35,9 +21,14 @@ Hai thanh trượt quyết định mức "giống người thật":
 
 Nếu thấy mặt hơi "lạ", hãy tăng độ trung thực hoặc giảm mức áp dụng AI xuống khoảng 0.6–0.7.
 
-## Dùng thử trên web
+## Dùng ngay trên web
 
-Mở **https://huggingface.co/spaces/conslmhoang/Enhance-image**, không cần cài gì. Bản web chạy trên máy chủ miễn phí nên chậm (1–2 phút mỗi ảnh), giới hạn ảnh 1024px và chỉ phóng tối đa 2×. Muốn nhanh hơn thì cài trên máy theo hướng dẫn dưới đây.
+👉 **https://conslmhoang.github.io/Enhance-image/**
+
+Không cần cài gì. AI chạy ngay trong trình duyệt của bạn nên **ảnh không được gửi lên máy chủ nào**.
+Lần đầu mở trang, trình duyệt tải model (~225MB) rồi lưu lại, lần sau dùng ngay.
+Nên dùng Chrome hoặc Edge bản mới trên máy tính (có WebGPU) để chạy nhanh: ảnh ~500×700 mất khoảng 30 giây.
+Bản web chỉ phóng tối đa 2× và tự thu nhỏ ảnh lớn hơn 1280px.
 
 ## Cài đặt và chạy trên máy
 
@@ -71,7 +62,7 @@ Chạy trên CPU: ảnh khoảng 500×700 px, phóng 2× mất khoảng 30 giây
 ## Giấy phép
 
 - Mã nguồn trong repo này: [MIT](LICENSE).
-- Model **không** nằm trong repo mà được tải từ nguồn gốc, mỗi model có giấy phép riêng:
+- Model có giấy phép riêng. Bản chạy trên máy tải model từ nguồn gốc; bản web dùng bản chuyển sang ONNX nằm trong `web/models/`:
   - [CodeFormer](https://github.com/sczhou/CodeFormer): S-Lab License 1.0, **chỉ dùng phi thương mại**.
   - [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN): BSD-3-Clause.
   - [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet): MIT.
